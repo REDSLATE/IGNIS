@@ -1,0 +1,123 @@
+class PublicTradingService:
+    """Public.com — REST API trading. Uses Bearer Token from developer portal."""
+
+    def __init__(self, api_key: str, api_secret: str, **kwargs: object) -> None:
+        self.access_token = api_key
+        self.account_id = api_secret
+        self.base_url = "https://api.public.com/userapigateway"
+        self.headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
+    def get_account(self) -> Optional[dict]:
+        try:
+            r = requests.get(f"{self.base_url}/trading/account",
+                             headers=self.headers, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            return {
+                "account_number": data.get("accountId", self.account_id),
+                "id": data.get("accountId", self.account_id),
+                "cash": float(data.get("cashAvailable", data.get("cash", 0))),
+                "buying_power": float(data.get("buyingPower", data.get("cashAvailable", 0))),
+                "equity": float(data.get("equity", data.get("totalValue", 0))),
+                "portfolio_value": float(data.get("portfolioValue", data.get("equity", 0))),
+            }
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_public",
+                "method": "get_account",
+            })
+            return None
+
+    def get_positions(self) -> list[dict]:
+        try:
+            r = requests.get(f"{self.base_url}/trading/account",
+                             headers=self.headers, timeout=10)
+            r.raise_for_status()
+            positions = []
+            for p in r.json().get("positions", []):
+                positions.append({
+                    "symbol": p.get("symbol", p.get("instrument", {}).get("symbol", "")),
+                    "qty": abs(float(p.get("quantity", 0))),
+                    "side": "long" if float(p.get("quantity", 0)) > 0 else "short",
+                    "avg_entry_price": float(p.get("averageCost", p.get("avgPrice", 0))),
+                    "current_price": float(p.get("currentPrice", p.get("lastPrice", 0))),
+                    "market_value": float(p.get("marketValue", 0)),
+                    "unrealized_pl": float(p.get("unrealizedPnl", 0)),
+                    "unrealized_plpc": float(p.get("unrealizedPnlPercent", 0)),
+                })
+            return positions
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_public",
+                "method": "get_positions",
+            })
+            return []
+
+    def place_order(self, symbol: str, qty: float, side: str, order_type: str = "market",
+                    time_in_force: str = "day", limit_price: Optional[float] = None,
+                    stop_price: Optional[float] = None) -> Optional[dict]:
+        try:
+            acc_id = self.account_id
+            data = {
+                "symbol": symbol.upper(),
+                "side": side.upper(),
+                "type": order_type.upper(),
+                "quantity": str(qty),
+                "timeInForce": time_in_force.upper(),
+            }
+            if limit_price and order_type != "market":
+                data["limitPrice"] = str(limit_price)
+            if stop_price:
+                data["stopPrice"] = str(stop_price)
+            r = requests.post(f"{self.base_url}/trading/{acc_id}/order",
+                              headers=self.headers, json=data, timeout=10)
+            r.raise_for_status()
+            result = r.json()
+            return {"id": result.get("orderId", ""), "status": "submitted", "symbol": symbol}
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_public",
+                "method": "place_order",
+            })
+            return None
+
+    def get_orders(self, status: str = "all", limit: int = 50) -> list[dict]:
+        try:
+            r = requests.get(f"{self.base_url}/trading/account",
+                             headers=self.headers, timeout=10)
+            r.raise_for_status()
+            return r.json().get("orders", [])[:limit]
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_public",
+                "method": "get_orders",
+            })
+            return []
+
+    def cancel_order(self, order_id: str) -> bool:
+        try:
+            r = requests.delete(f"{self.base_url}/trading/{self.account_id}/order/{order_id}",
+                                headers=self.headers, timeout=10)
+            r.raise_for_status()
+            return True
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_public",
+                "method": "cancel_order",
+            })
+            return False
+
+

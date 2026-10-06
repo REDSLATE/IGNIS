@@ -1,0 +1,124 @@
+class MooMooTradingService:
+    """MooMoo (Futu) — OpenAPI REST trading. Uses App Token from developer portal."""
+
+    def __init__(self, api_key: str, api_secret: str, **kwargs: object) -> None:
+        self.app_token = api_key
+        self.account_id = api_secret
+        self.base_url = "https://openapi.moomoo.com"
+        self.headers = {
+            "Authorization": f"Bearer {self.app_token}",
+            "Content-Type": "application/json",
+        }
+
+    def get_account(self) -> Optional[dict]:
+        try:
+            r = requests.get(f"{self.base_url}/v1/account/list",
+                             headers=self.headers, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            accounts = data.get("data", {}).get("accounts", [])
+            if accounts:
+                acc = accounts[0]
+                return {
+                    "account_number": acc.get("accountId", self.account_id),
+                    "cash": acc.get("cashBalance", 0),
+                    "buying_power": acc.get("buyingPower", 0),
+                    "equity": acc.get("netAssets", 0),
+                    "portfolio_value": acc.get("totalMarketValue", 0),
+                }
+            return {"account_number": self.account_id, "cash": 0, "buying_power": 0, "equity": 0, "portfolio_value": 0}
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_moomoo",
+                "method": "get_account",
+            })
+            return None
+
+    def get_positions(self) -> list[dict]:
+        try:
+            r = requests.get(f"{self.base_url}/v1/account/{self.account_id}/positions",
+                             headers=self.headers, timeout=10)
+            r.raise_for_status()
+            positions = []
+            for p in r.json().get("data", {}).get("positions", []):
+                positions.append({
+                    "symbol": p.get("ticker", {}).get("symbol", ""),
+                    "qty": abs(float(p.get("quantity", 0))),
+                    "side": "long" if float(p.get("quantity", 0)) > 0 else "short",
+                    "avg_entry_price": float(p.get("avgCost", 0)),
+                    "current_price": float(p.get("lastPrice", 0)),
+                    "market_value": float(p.get("marketValue", 0)),
+                    "unrealized_pl": float(p.get("unrealizedPnL", 0)),
+                    "unrealized_plpc": float(p.get("unrealizedPnLPercent", 0)),
+                })
+            return positions
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_moomoo",
+                "method": "get_positions",
+            })
+            return []
+
+    def place_order(self, symbol: str, qty: float, side: str, order_type: str = "market",
+                    time_in_force: str = "day", limit_price: Optional[float] = None,
+                    stop_price: Optional[float] = None) -> Optional[dict]:
+        try:
+            data = {
+                "accountId": self.account_id,
+                "ticker": {"market": "US", "symbol": symbol.upper()},
+                "side": "BUY" if side.lower() == "buy" else "SELL",
+                "orderType": "MARKET" if order_type == "market" else "LIMIT",
+                "quantity": str(int(qty)),
+                "timeInForce": time_in_force.upper(),
+            }
+            if limit_price and order_type != "market":
+                data["limitPrice"] = str(limit_price)
+            r = requests.post(f"{self.base_url}/v1/trade/order",
+                              headers=self.headers, json=data, timeout=10)
+            r.raise_for_status()
+            result = r.json().get("data", {})
+            return {"id": result.get("orderId", ""), "status": "submitted", "symbol": symbol}
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_moomoo",
+                "method": "place_order",
+            })
+            return None
+
+    def get_orders(self, status: str = "all", limit: int = 50) -> list[dict]:
+        try:
+            r = requests.get(f"{self.base_url}/v1/account/{self.account_id}/orders",
+                             headers=self.headers, params={"limit": limit}, timeout=10)
+            r.raise_for_status()
+            return r.json().get("data", {}).get("orders", [])
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_moomoo",
+                "method": "get_orders",
+            })
+            return []
+
+    def cancel_order(self, order_id: str) -> bool:
+        try:
+            r = requests.delete(f"{self.base_url}/v1/trade/order/{order_id}",
+                                headers=self.headers, timeout=10)
+            r.raise_for_status()
+            return True
+        except Exception as e:
+            log_error(logger, {
+                "error": str(e),
+                "type": type(e).__name__,
+                "context": "broker_moomoo",
+                "method": "cancel_order",
+            })
+            return False
+
+
