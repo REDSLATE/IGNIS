@@ -1,0 +1,6 @@
+{
+  "source": "REDSLATE/RISEDUAL-AI-2",
+  "branch": "newmain",
+  "commit": "39f513dacc51a29f031dc85c494a25b1c6d2c4f9",
+  "note": "Preserved detectors and chart library; broker excerpts are audit-only and cannot submit orders."
+}
