@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict
 from decimal import Decimal, ROUND_DOWN
 from typing import Protocol
 import json, math, sqlite3, threading, time, uuid
+from .maturity import Move, MaturityPolicy
 
 class BrokerError(RuntimeError): pass
 
@@ -31,6 +32,7 @@ class Candidate:
     stop: float
     target: float
     score: float
+    move: Move | None = None
 
 @dataclass(frozen=True)
 class Order:
@@ -69,8 +71,9 @@ class Policy:
             if not math.isfinite(value) or value <= 0: raise ValueError('Invalid policy')
 
 class Engine:
-    def __init__(self, broker: Broker, db_path: str, policy: Policy = Policy(), clock=time.time):
+    def __init__(self, broker: Broker, db_path: str, policy: Policy = Policy(), clock=time.time, maturity_policy: MaturityPolicy = MaturityPolicy()):
         self.broker,self.policy,self.clock = broker,policy,clock
+        self.maturity_policy = maturity_policy
         self.armed = False
         self.lock = threading.RLock()
         self.db = sqlite3.connect(db_path,check_same_thread=False)
@@ -101,6 +104,14 @@ class Engine:
         return {'status':'REJECTED','reason':reason}
     def execute(self,c: Candidate):
         with self.lock:
+            now=self.clock()
+            verdict,metrics=self.maturity_policy.evaluate(c.move,getattr(c.move,'observed_ask',c.trigger),now)
+            self.record('SIGNAL',candidate=c.id,symbol=c.symbol,pattern=c.pattern,
+                        detected_at=c.detected_at,decision_at=now,stage='signal',
+                        detection_origin_lag_seconds=(c.detected_at-c.move.origin_at) if metrics else None,
+                        queue_lag_seconds=now-c.detected_at,
+                        maturity_verdict=verdict,metrics=metrics,
+                        calibration_id=self.maturity_policy.calibration_id)
             if not self.armed: return self.reject(c,'disarmed')
             numbers=(c.detected_at,c.expires_at,c.trigger,c.stop,c.target,c.score)
             if not c.id or not c.symbol or any(not math.isfinite(x) for x in numbers): return self.reject(c,'invalid_candidate')
@@ -119,6 +130,13 @@ class Engine:
                 if q.symbol!=c.symbol or q.session!='regular': return self.reject(c,'unsupported_session')
                 if any(not math.isfinite(x) for x in (q.bid,q.ask,q.timestamp,a.buying_power,a.equity)): return self.reject(c,'invalid_broker_data')
                 if q.bid<=0 or q.ask<q.bid or not 0<=now-q.timestamp<=self.policy.quote_age_seconds: return self.reject(c,'invalid_or_stale_book')
+                verdict,metrics=self.maturity_policy.evaluate(c.move,q.ask,now)
+                self.record('MATURITY',candidate=c.id,symbol=c.symbol,stage='submit',
+                            maturity_verdict=verdict,metrics=metrics,
+                            signal_to_submit_seconds=now-c.detected_at,
+                            calibration_id=self.maturity_policy.calibration_id,
+                            enforced=self.maturity_policy.enforce)
+                if self.maturity_policy.enforce and verdict!='maturity_eligible': return self.reject(c,verdict)
                 if (q.ask-q.bid)/q.ask>self.policy.max_spread_fraction: return self.reject(c,'spread')
                 if not 0<c.stop<c.trigger<c.target: return self.reject(c,'invalid_trade_plan')
                 if q.ask<c.trigger: return self.reject(c,'trigger_not_reached')

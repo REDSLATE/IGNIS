@@ -69,3 +69,11 @@ lease to prevent legacy/new systems owning the same account. Do not run both arm
 
 An acknowledgment is not a fill. Terminal order states need position reconciliation
 in the adapter/service integration before this can be promoted to live operation.
+
+## Move maturity diagnostics
+
+Optional causal move snapshots now produce signal/submit receipts and a separate
+origin-ATR maturity gate. Diagnostic-only by default; enforcement needs a scoped,
+versioned calibration. Forward expectancy reports include rejected signals and
+split results by extension, age, regime and feed. See
+[worker contract and calibration workflow](docs/MOVE_MATURITY.md).
